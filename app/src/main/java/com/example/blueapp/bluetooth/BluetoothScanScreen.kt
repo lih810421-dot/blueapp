@@ -57,6 +57,7 @@ fun BluetoothScanScreen(
     scanning: Boolean,
     onToggleScan: () -> Unit,
     onDeviceClick: (BleDeviceInfo) -> Unit,
+    onSettingsClick: () -> Unit,
     bluetoothEnabled: Boolean,
     hasPermissions: Boolean,
     onRequestPermissions: () -> Unit,
@@ -79,7 +80,7 @@ fun BluetoothScanScreen(
                 .fillMaxSize()
                 .padding(horizontal = 24.dp, vertical = 18.dp),
         ) {
-            Header()
+            Header(onSettingsClick = onSettingsClick)
 
             Spacer(modifier = Modifier.height(18.dp))
 
@@ -119,7 +120,7 @@ fun BluetoothScanScreen(
 }
 
 @Composable
-private fun Header() {
+private fun Header(onSettingsClick: () -> Unit) {
     Box(modifier = Modifier.fillMaxWidth()) {
         IconButton(
             onClick = { /* TODO: menu */ },
@@ -154,7 +155,7 @@ private fun Header() {
         }
 
         IconButton(
-            onClick = { /* TODO: settings */ },
+            onClick = onSettingsClick,
             modifier = Modifier.align(Alignment.CenterEnd),
         ) {
             Icon(

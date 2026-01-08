@@ -35,6 +35,7 @@ fun BluetoothAssistantApp() {
     val connectionState by bleManager.connectionState.collectAsState()
     val sensorData by bleManager.sensorData.collectAsState()
     val errorMessage by bleManager.errorMessage.collectAsState()
+    val bleLogs by bleManager.bleLogs.collectAsState()
 
     // 界面状态
     var screen by rememberSaveable { mutableStateOf("scan") }
@@ -121,11 +122,12 @@ fun BluetoothAssistantApp() {
                         }
                     }
                 },
-            onDeviceClick = { device ->
+                onDeviceClick = { device ->
                     selectedDeviceAddress = device.address
                     bleManager.connect(device.device)
-                screen = "control"
-            },
+                    screen = "control"
+                },
+                onSettingsClick = { screen = "debug" },
                 bluetoothEnabled = bluetoothEnabled,
                 hasPermissions = hasPermissions,
                 onRequestPermissions = {
@@ -188,6 +190,28 @@ fun BluetoothAssistantApp() {
                 onClearError = {
                     bleManager.clearError()
                 }
+            )
+        }
+
+        "debug" -> {
+            val connectionStateText = when (connectionState) {
+                ConnectionState.DISCONNECTED -> "已断开"
+                ConnectionState.CONNECTING -> "连接中..."
+                ConnectionState.CONNECTED -> "已连接"
+                ConnectionState.DISCOVERING_SERVICES -> "发现服务中..."
+                ConnectionState.READY -> "就绪"
+            }
+
+            BleDebuggerScreen(
+                connected = connectionState == ConnectionState.READY,
+                connectionStateText = connectionStateText,
+                logs = bleLogs,
+                onSendHex = { hex ->
+                    // 如果发送失败，错误会通过 errorMessage 流提示；调试器页也能从日志看到 TX
+                    bleManager.sendRawHexCommand(hex)
+                },
+                onClearLogs = { bleManager.clearBleLogs() },
+                onBack = { screen = "scan" },
             )
         }
     }

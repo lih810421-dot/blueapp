@@ -27,6 +27,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.util.Locale
 import java.util.UUID
 
 /**
@@ -49,6 +50,14 @@ enum class ConnectionState {
     DISCOVERING_SERVICES,
     READY
 }
+
+enum class BleLogDirection { TX, RX }
+
+data class BleLogEntry(
+    val timeMillis: Long,
+    val direction: BleLogDirection,
+    val hex: String,
+)
 
 /**
  * BLE 管理器
@@ -92,6 +101,29 @@ class BleManager(private val context: Context) {
 
     private val _errorMessage = MutableStateFlow<String?>(null)
     val errorMessage: StateFlow<String?> = _errorMessage.asStateFlow()
+
+    // 调试日志（TX/RX notify）
+    private val _bleLogs = MutableStateFlow<List<BleLogEntry>>(emptyList())
+    val bleLogs: StateFlow<List<BleLogEntry>> = _bleLogs.asStateFlow()
+
+    private val _lastNotify = MutableStateFlow<ByteArray?>(null)
+    val lastNotify: StateFlow<ByteArray?> = _lastNotify.asStateFlow()
+
+    private fun appendLog(direction: BleLogDirection, data: ByteArray) {
+        val entry = BleLogEntry(
+            timeMillis = System.currentTimeMillis(),
+            direction = direction,
+            hex = data.toHexString(),
+        )
+        val current = _bleLogs.value
+        val next = (current + entry).takeLast(400)
+        _bleLogs.value = next
+    }
+
+    fun clearBleLogs() {
+        _bleLogs.value = emptyList()
+        _lastNotify.value = null
+    }
 
     /**
      * 检查蓝牙是否开启
@@ -298,6 +330,8 @@ class BleManager(private val context: Context) {
             value: ByteArray
         ) {
             Log.d(TAG, "【RX】${value.toHexString()}")
+            _lastNotify.value = value
+            appendLog(BleLogDirection.RX, value)
             handleReceivedData(value)
         }
 
@@ -392,6 +426,7 @@ class BleManager(private val context: Context) {
 
         return try {
             Log.d(TAG, "【TX】${data.toHexString()}")
+            appendLog(BleLogDirection.TX, data)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 gatt.writeCharacteristic(char, data, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
                 BluetoothGatt.GATT_SUCCESS
@@ -405,6 +440,26 @@ class BleManager(private val context: Context) {
             Log.e(TAG, "写入数据失败", e)
             false
         }
+    }
+
+    /**
+     * 发送自定义十六进制指令（调试器使用）
+     *
+     * 支持输入：
+     * - "7E 7F 50 FB FD"
+     * - "7E7F50FBFD"
+     */
+    fun sendRawHexCommand(hex: String): Boolean {
+        if (_connectionState.value != ConnectionState.READY) {
+            _errorMessage.value = "设备未就绪"
+            return false
+        }
+        val bytes = parseHexToBytes(hex)
+        if (bytes == null || bytes.isEmpty()) {
+            _errorMessage.value = "指令格式错误：请输入十六进制（例如 7E 7F 50 FB FD）"
+            return false
+        }
+        return writeData(bytes)
     }
 
     /**
@@ -502,6 +557,33 @@ class BleManager(private val context: Context) {
      */
     private fun ByteArray.toHexString(): String = 
         BleProtocol.run { toHexString() }
+
+    private fun parseHexToBytes(input: String): ByteArray? {
+        val cleaned = input
+            .trim()
+            .replace("\n", " ")
+            .replace("\t", " ")
+            .replace("0x", "", ignoreCase = true)
+            .replace(" ", "")
+            .uppercase(Locale.US)
+
+        if (cleaned.isEmpty()) return byteArrayOf()
+        if (!cleaned.matches(Regex("^[0-9A-F]+$"))) return null
+        if (cleaned.length % 2 != 0) return null
+
+        return try {
+            val out = ByteArray(cleaned.length / 2)
+            var i = 0
+            while (i < cleaned.length) {
+                val byteStr = cleaned.substring(i, i + 2)
+                out[i / 2] = byteStr.toInt(16).toByte()
+                i += 2
+            }
+            out
+        } catch (_: Exception) {
+            null
+        }
+    }
 
     /**
      * 清理资源
