@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <style name="Theme.Blueapp" parent="android:Theme.Material.Light.NoActionBar" />
+
+    <!-- Android 12+ 启动页（兼容库提供同名主题，低版本也可用） -->
+    <style name="Theme.Blueapp.Splash" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/splash_background</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_splash</item>
+        <item name="windowSplashScreenAnimationDuration">200</item>
+        <item name="postSplashScreenTheme">@style/Theme.Blueapp</item>
+    </style>
+</resources>

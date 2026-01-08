@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- 使用现有启动图标前景作为 Splash 图标（可随时替换为自定义矢量） -->
+    <item android:gravity="center">
+        <inset
+            android:insetLeft="24dp"
+            android:insetTop="24dp"
+            android:insetRight="24dp"
+            android:insetBottom="24dp">
+            <drawable android:drawable="@drawable/ic_launcher_foreground" />
+        </inset>
+    </item>
+</layer-list>
+
