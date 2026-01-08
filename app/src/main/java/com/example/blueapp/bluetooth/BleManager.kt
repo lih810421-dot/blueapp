@@ -352,33 +352,117 @@ class BleManager(private val context: Context) {
      * 分析并配置特征值
      */
     private fun analyzeCharacteristics(gatt: BluetoothGatt) {
-        var foundWriteChar = false
-        var foundNotifyChar = false
+        writeCharacteristic = null
+        notifyCharacteristic = null
 
-        for (service in gatt.services) {
+        val preferredService = BleUuidConfig.PREFERRED_SERVICE_UUID?.normalizeUuid()
+        val preferredWrite = BleUuidConfig.PREFERRED_WRITE_CHAR_UUID?.normalizeUuid()
+        val preferredNotify = BleUuidConfig.PREFERRED_NOTIFY_CHAR_UUID?.normalizeUuid()
+
+        val allServices = gatt.services ?: emptyList()
+        val filteredAllServices = allServices.filter { !isSystemService(it.uuid?.toString()) }
+
+        val targetService = preferredService?.let { ps ->
+            filteredAllServices.firstOrNull { it.uuid?.toString().normalizeUuid() == ps }
+        }
+        val servicesToTry = (listOfNotNull(targetService) + filteredAllServices)
+            .distinctBy { it.uuid?.toString().normalizeUuid() }
+
+        fun isWritable(ch: BluetoothGattCharacteristic): Boolean {
+            val p = ch.properties
+            return (p and BluetoothGattCharacteristic.PROPERTY_WRITE != 0) ||
+                (p and BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE != 0)
+        }
+
+        fun isNotifiableOrIndicatable(ch: BluetoothGattCharacteristic): Boolean {
+            val p = ch.properties
+            return (p and BluetoothGattCharacteristic.PROPERTY_NOTIFY != 0) ||
+                (p and BluetoothGattCharacteristic.PROPERTY_INDICATE != 0)
+        }
+
+        // Pass 1：优先在 targetService（如果配置）里找，否则按非系统服务顺序找
+        for (service in servicesToTry) {
             Log.d(TAG, "服务: ${service.uuid}")
-            
-            for (characteristic in service.characteristics) {
+            val chars = service.characteristics ?: emptyList()
+            for (characteristic in chars) {
+                val uuidStr = characteristic.uuid?.toString()
                 val properties = characteristic.properties
                 Log.d(TAG, "  特征值: ${characteristic.uuid}, 属性: $properties")
 
-                // 查找可写特征值
-                if (!foundWriteChar && (properties and BluetoothGattCharacteristic.PROPERTY_WRITE != 0 ||
-                    properties and BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE != 0)) {
-                    writeCharacteristic = characteristic
-                    foundWriteChar = true
-                    Log.d(TAG, "  ✓ 可写特征值")
+                if (writeCharacteristic == null) {
+                    val hit = preferredWrite?.let { pw -> uuidStr.normalizeUuid() == pw } == true
+                    if (hit) {
+                        writeCharacteristic = characteristic
+                        Log.d(TAG, "  ✓ 写特征值（UUID精确匹配）: ${characteristic.uuid}")
+                    }
                 }
 
-                // 查找可通知特征值
-                if (!foundNotifyChar && (properties and BluetoothGattCharacteristic.PROPERTY_NOTIFY != 0 ||
-                    properties and BluetoothGattCharacteristic.PROPERTY_INDICATE != 0)) {
-                    notifyCharacteristic = characteristic
-                    foundNotifyChar = true
-                    enableNotification(gatt, characteristic)
-                    Log.d(TAG, "  ✓ 可通知特征值")
+                if (notifyCharacteristic == null) {
+                    val hit = preferredNotify?.let { pn -> uuidStr.normalizeUuid() == pn } == true
+                    if (hit && !isSystemChar(uuidStr) && isNotifiableOrIndicatable(characteristic)) {
+                        notifyCharacteristic = characteristic
+                        Log.d(TAG, "  ✓ 通知特征值（UUID精确匹配）: ${characteristic.uuid}")
+                    }
                 }
             }
+
+            // 如果 UUID 精确匹配没找到，则回退到能力匹配（仍旧排除系统特征）
+            if (writeCharacteristic == null) {
+                writeCharacteristic = chars.firstOrNull { isWritable(it) }
+                if (writeCharacteristic != null) {
+                    Log.d(TAG, "  ✓ 写特征值（能力回退）: ${writeCharacteristic?.uuid}")
+                }
+            }
+            if (notifyCharacteristic == null) {
+                notifyCharacteristic = chars.firstOrNull { ch ->
+                    val u = ch.uuid?.toString()
+                    !isSystemChar(u) && isNotifiableOrIndicatable(ch)
+                }
+                if (notifyCharacteristic != null) {
+                    Log.d(TAG, "  ✓ 通知特征值（能力回退）: ${notifyCharacteristic?.uuid}")
+                }
+            }
+
+            if (writeCharacteristic != null && notifyCharacteristic != null) break
+        }
+
+        // Pass 2：如果在 targetService / 主遍历中没找到 notify，但配置了 notify UUID，则在所有服务里再找一次
+        if (notifyCharacteristic == null && preferredNotify != null) {
+            for (service in filteredAllServices) {
+                val chars = service.characteristics ?: emptyList()
+                val hit = chars.firstOrNull { ch ->
+                    val u = ch.uuid?.toString()
+                    u.normalizeUuid() == preferredNotify && !isSystemChar(u) && isNotifiableOrIndicatable(ch)
+                }
+                if (hit != null) {
+                    notifyCharacteristic = hit
+                    Log.d(TAG, "✓ 通知特征值（二次全局匹配）service=${service.uuid} char=${hit.uuid}")
+                    break
+                }
+            }
+        }
+
+        // Pass 3：仍然找不到 notify，则在所有服务里找第一个可通知/指示的非系统特征
+        if (notifyCharacteristic == null) {
+            outer@ for (service in filteredAllServices) {
+                val chars = service.characteristics ?: emptyList()
+                for (ch in chars) {
+                    val u = ch.uuid?.toString()
+                    if (!isSystemChar(u) && isNotifiableOrIndicatable(ch)) {
+                        notifyCharacteristic = ch
+                        Log.d(TAG, "✓ 通知特征值（全局能力回退）service=${service.uuid} char=${ch.uuid}")
+                        break@outer
+                    }
+                }
+            }
+        }
+
+        val foundWriteChar = writeCharacteristic != null
+        val foundNotifyChar = notifyCharacteristic != null
+
+        // 只在最终选定后启用通知（避免遍历过程中启用到错误特征）
+        if (foundNotifyChar) {
+            enableNotification(gatt, notifyCharacteristic!!)
         }
 
         if (foundWriteChar && foundNotifyChar) {
@@ -492,16 +576,11 @@ class BleManager(private val context: Context) {
 
         // 尝试解析完整的数据包
         // 根据协议，数据包以 7E 7F 30 开头
-        val startIndex = receivedDataBuffer.indexOfFirst { 
-            receivedDataBuffer.size >= 3 && 
-            it == 0x7E.toByte() && 
-            receivedDataBuffer.getOrNull(receivedDataBuffer.indexOf(it) + 1) == 0x7F.toByte() &&
-            receivedDataBuffer.getOrNull(receivedDataBuffer.indexOf(it) + 2) == 0x30.toByte()
-        }
+        val startIndex = findHeaderIndex(receivedDataBuffer)
 
         if (startIndex >= 0) {
             // 找到数据包头，检查是否有足够的数据
-            val packetData = receivedDataBuffer.drop(startIndex).take(100).toByteArray()
+            val packetData = receivedDataBuffer.drop(startIndex).take(256).toByteArray()
             
             val sensorData = BleProtocol.parseSensorData(packetData)
             if (sensorData != null) {
@@ -583,6 +662,30 @@ class BleManager(private val context: Context) {
         } catch (_: Exception) {
             null
         }
+    }
+
+    private fun String?.normalizeUuid(): String =
+        (this ?: "").trim().uppercase(Locale.US)
+
+    private fun isSystemService(uuid: String?): Boolean {
+        val u = uuid.normalizeUuid()
+        return u.startsWith("00001800") || u.startsWith("00001801") // GAP / GATT
+    }
+
+    private fun isSystemChar(uuid: String?): Boolean {
+        val u = uuid.normalizeUuid()
+        return u.startsWith("00002A00") || u.startsWith("00002A01") // Device Name / Appearance
+    }
+
+    private fun findHeaderIndex(buf: List<Byte>): Int {
+        if (buf.size < 3) return -1
+        val b0 = 0x7E.toByte()
+        val b1 = 0x7F.toByte()
+        val b2 = 0x30.toByte()
+        for (i in 0..(buf.size - 3)) {
+            if (buf[i] == b0 && buf[i + 1] == b1 && buf[i + 2] == b2) return i
+        }
+        return -1
     }
 
     /**
