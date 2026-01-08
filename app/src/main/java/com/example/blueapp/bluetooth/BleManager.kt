@@ -462,6 +462,10 @@ class BleManager(private val context: Context) {
 
         // 只在最终选定后启用通知（避免遍历过程中启用到错误特征）
         if (foundNotifyChar) {
+            Log.d(
+                TAG,
+                "最终选择特征值: write=${writeCharacteristic?.uuid} notify=${notifyCharacteristic?.uuid}",
+            )
             enableNotification(gatt, notifyCharacteristic!!)
         }
 
@@ -481,18 +485,44 @@ class BleManager(private val context: Context) {
      * 启用通知
      */
     private fun enableNotification(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
-        gatt.setCharacteristicNotification(characteristic, true)
+        val ok = gatt.setCharacteristicNotification(characteristic, true)
+        if (!ok) {
+            Log.e(TAG, "setCharacteristicNotification 返回 false: ${characteristic.uuid}")
+            _errorMessage.value = "启用通知失败（setCharacteristicNotification=false）"
+        }
         
         val descriptor = characteristic.getDescriptor(CLIENT_CHARACTERISTIC_CONFIG_UUID)
         if (descriptor != null) {
+            val props = characteristic.properties
+            val enableValue = when {
+                (props and BluetoothGattCharacteristic.PROPERTY_NOTIFY) != 0 -> BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+                (props and BluetoothGattCharacteristic.PROPERTY_INDICATE) != 0 -> BluetoothGattDescriptor.ENABLE_INDICATION_VALUE
+                else -> BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+            }
+
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                gatt.writeDescriptor(descriptor, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
+                val r = gatt.writeDescriptor(descriptor, enableValue)
+                if (r != BluetoothGatt.GATT_SUCCESS) {
+                    Log.e(TAG, "writeDescriptor 失败: r=$r char=${characteristic.uuid} desc=${descriptor.uuid}")
+                    _errorMessage.value = "订阅通知失败（writeDescriptor=$r）"
+                }
             } else {
                 @Suppress("DEPRECATION")
-                descriptor.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+                descriptor.value = enableValue
                 @Suppress("DEPRECATION")
                 gatt.writeDescriptor(descriptor)
             }
+
+            Log.d(
+                TAG,
+                "已写入CCCD: char=${characteristic.uuid} value=${
+                    enableValue.joinToString(\" \") { String.format(\"%02X\", it) }
+                }",
+            )
+        } else {
+            // 有些设备没有 CCCD，但仍然可能通过 setCharacteristicNotification 工作；这里给出提示方便排查
+            Log.w(TAG, "未找到CCCD(0x2902) descriptor: char=${characteristic.uuid}")
+            _errorMessage.value = "未找到CCCD(0x2902)，可能无法收到Notify"
         }
     }
 
