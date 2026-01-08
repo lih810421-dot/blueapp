@@ -159,6 +159,9 @@ fun BluetoothAssistantApp() {
                 ConnectionState.CONNECTING -> "连接中..."
                 ConnectionState.CONNECTED -> "已连接"
                 ConnectionState.DISCOVERING_SERVICES -> "发现服务中..."
+                ConnectionState.ANALYZING_CHARACTERISTICS -> "分析特征值中..."
+                ConnectionState.ENABLING_NOTIFY -> "开启通知中..."
+                ConnectionState.RECONNECTING -> "重连中..."
                 ConnectionState.READY -> "就绪"
             }
 
@@ -207,6 +210,9 @@ fun BluetoothAssistantApp() {
                 ConnectionState.CONNECTING -> "连接中..."
                 ConnectionState.CONNECTED -> "已连接"
                 ConnectionState.DISCOVERING_SERVICES -> "发现服务中..."
+                ConnectionState.ANALYZING_CHARACTERISTICS -> "分析特征值中..."
+                ConnectionState.ENABLING_NOTIFY -> "开启通知中..."
+                ConnectionState.RECONNECTING -> "重连中..."
                 ConnectionState.READY -> "就绪"
             }
 

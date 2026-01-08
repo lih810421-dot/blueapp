@@ -48,6 +48,9 @@ enum class ConnectionState {
     CONNECTING,
     CONNECTED,
     DISCOVERING_SERVICES,
+    ANALYZING_CHARACTERISTICS,
+    ENABLING_NOTIFY,
+    RECONNECTING,
     READY
 }
 
@@ -81,6 +84,14 @@ class BleManager(private val context: Context) {
     private var bluetoothGatt: BluetoothGatt? = null
     private var writeCharacteristic: BluetoothGattCharacteristic? = null
     private var notifyCharacteristic: BluetoothGattCharacteristic? = null
+
+    // 连接与重连策略
+    private var lastDevice: BluetoothDevice? = null
+    private var userInitiatedDisconnect: Boolean = true
+    private var reconnectJob: Job? = null
+
+    private val reconnectMaxRetry = 5
+    private val reconnectDelayMs = 1200L
     
     private val scope = CoroutineScope(Dispatchers.IO)
     private var pollingJob: Job? = null
@@ -237,10 +248,13 @@ class BleManager(private val context: Context) {
         }
 
         stopScan()
-        disconnect()
+        // 用户选择连接新设备：关闭旧连接，但不触发自动重连
+        disconnect(userInitiated = true)
 
         _connectionState.value = ConnectionState.CONNECTING
         _errorMessage.value = null
+        userInitiatedDisconnect = false
+        lastDevice = device
 
         try {
             bluetoothGatt = device.connectGatt(context, false, gattCallback)
@@ -255,7 +269,10 @@ class BleManager(private val context: Context) {
     /**
      * 断开连接
      */
-    fun disconnect() {
+    fun disconnect(userInitiated: Boolean = true) {
+        userInitiatedDisconnect = userInitiated
+        reconnectJob?.cancel()
+        reconnectJob = null
         stopPolling()
         try {
             bluetoothGatt?.disconnect()
@@ -270,6 +287,10 @@ class BleManager(private val context: Context) {
         } catch (e: Exception) {
             Log.e(TAG, "断开连接失败", e)
         }
+
+        if (userInitiated) {
+            lastDevice = null
+        }
     }
 
     private val gattCallback = object : BluetoothGattCallback() {
@@ -283,9 +304,17 @@ class BleManager(private val context: Context) {
                 }
                 BluetoothProfile.STATE_DISCONNECTED -> {
                     Log.d(TAG, "从 GATT 服务器断开")
+                    try {
+                        gatt.close()
+                    } catch (_: Exception) {}
                     _connectionState.value = ConnectionState.DISCONNECTED
                     _errorMessage.value = "设备已断开连接"
                     stopPolling()
+
+                    // 意外断开：尝试重连
+                    if (!userInitiatedDisconnect) {
+                        startReconnect()
+                    }
                 }
             }
         }
@@ -293,6 +322,7 @@ class BleManager(private val context: Context) {
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
             if (status == BluetoothGatt.GATT_SUCCESS) {
                 Log.d(TAG, "服务发现成功")
+                _connectionState.value = ConnectionState.ANALYZING_CHARACTERISTICS
                 analyzeCharacteristics(gatt)
             } else {
                 Log.e(TAG, "服务发现失败: $status")
@@ -342,8 +372,20 @@ class BleManager(private val context: Context) {
         ) {
             if (status == BluetoothGatt.GATT_SUCCESS) {
                 Log.d(TAG, "描述符写入成功，通知已启用")
+                // CCCD 写成功后，进入 READY 并开始业务通信（轮询）
+                if (_connectionState.value == ConnectionState.ENABLING_NOTIFY) {
+                    _connectionState.value = ConnectionState.READY
+                    _errorMessage.value = null
+                    startPolling()
+                    Log.d(TAG, "设备已就绪，开始数据轮询")
+                }
             } else {
                 Log.e(TAG, "描述符写入失败: $status")
+                _errorMessage.value = "订阅通知失败（descriptorWrite=$status）"
+                // 订阅失败时仍保持连接，但不进入 READY
+                if (_connectionState.value == ConnectionState.ENABLING_NOTIFY) {
+                    _connectionState.value = ConnectionState.CONNECTED
+                }
             }
         }
     }
@@ -460,20 +502,12 @@ class BleManager(private val context: Context) {
         val foundWriteChar = writeCharacteristic != null
         val foundNotifyChar = notifyCharacteristic != null
 
-        // 只在最终选定后启用通知（避免遍历过程中启用到错误特征）
-        if (foundNotifyChar) {
-            Log.d(
-                TAG,
-                "最终选择特征值: write=${writeCharacteristic?.uuid} notify=${notifyCharacteristic?.uuid}",
-            )
-            enableNotification(gatt, notifyCharacteristic!!)
-        }
-
         if (foundWriteChar && foundNotifyChar) {
-            _connectionState.value = ConnectionState.READY
+            Log.d(TAG, "最终选择特征值: write=${writeCharacteristic?.uuid} notify=${notifyCharacteristic?.uuid}")
+            _connectionState.value = ConnectionState.ENABLING_NOTIFY
             _errorMessage.value = null
-            startPolling()
-            Log.d(TAG, "设备已就绪，开始数据轮询")
+            // 只在最终选定后启用通知（避免遍历过程中启用到错误特征）
+            enableNotification(gatt, notifyCharacteristic!!)
         } else {
             _errorMessage.value = "未找到合适的通信特征值"
             _connectionState.value = ConnectionState.CONNECTED
@@ -518,10 +552,49 @@ class BleManager(private val context: Context) {
                 TAG,
                 "已写入CCCD: char=${characteristic.uuid} value=$valueHex",
             )
+
+            // 注意：READY 会在 onDescriptorWrite 成功后设置
         } else {
             // 有些设备没有 CCCD，但仍然可能通过 setCharacteristicNotification 工作；这里给出提示方便排查
             Log.w(TAG, "未找到CCCD(0x2902) descriptor: char=${characteristic.uuid}")
             _errorMessage.value = "未找到CCCD(0x2902)，可能无法收到Notify"
+
+            // 没有 CCCD 时，尽力进入 READY（部分设备仍能收到回包）
+            if (_connectionState.value == ConnectionState.ENABLING_NOTIFY) {
+                _connectionState.value = ConnectionState.READY
+                startPolling()
+            }
+        }
+    }
+
+    private fun startReconnect() {
+        val device = lastDevice ?: return
+        reconnectJob?.cancel()
+        reconnectJob = scope.launch {
+            _connectionState.value = ConnectionState.RECONNECTING
+            for (attempt in 1..reconnectMaxRetry) {
+                if (userInitiatedDisconnect) return@launch
+                _errorMessage.value = "连接断开，正在重连（$attempt/$reconnectMaxRetry）..."
+                delay(reconnectDelayMs)
+                try {
+                    bluetoothGatt?.close()
+                } catch (_: Exception) {}
+                bluetoothGatt = null
+                writeCharacteristic = null
+                notifyCharacteristic = null
+                receivedDataBuffer.clear()
+
+                try {
+                    _connectionState.value = ConnectionState.CONNECTING
+                    bluetoothGatt = device.connectGatt(context, false, gattCallback)
+                    Log.d(TAG, "重连发起: ${device.name} (${device.address})")
+                    return@launch
+                } catch (e: Exception) {
+                    Log.e(TAG, "重连失败 attempt=$attempt", e)
+                }
+            }
+            _connectionState.value = ConnectionState.DISCONNECTED
+            _errorMessage.value = "重连失败，请手动重新连接"
         }
     }
 
@@ -721,7 +794,7 @@ class BleManager(private val context: Context) {
      * 清理资源
      */
     fun cleanup() {
-        disconnect()
+        disconnect(userInitiated = true)
         stopScan()
     }
 }
