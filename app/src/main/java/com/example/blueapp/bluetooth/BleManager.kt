@@ -513,11 +513,10 @@ class BleManager(private val context: Context) {
                 gatt.writeDescriptor(descriptor)
             }
 
+            val valueHex = enableValue.joinToString(" ") { b -> "%02X".format(b) }
             Log.d(
                 TAG,
-                "已写入CCCD: char=${characteristic.uuid} value=${
-                    enableValue.joinToString(\" \") { String.format(\"%02X\", it) }
-                }",
+                "已写入CCCD: char=${characteristic.uuid} value=$valueHex",
             )
         } else {
             // 有些设备没有 CCCD，但仍然可能通过 setCharacteristicNotification 工作；这里给出提示方便排查
