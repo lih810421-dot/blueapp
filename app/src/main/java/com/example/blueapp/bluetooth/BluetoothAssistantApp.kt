@@ -40,6 +40,7 @@ fun BluetoothAssistantApp() {
     // 界面状态
     var screen by rememberSaveable { mutableStateOf("scan") }
     var selectedDeviceAddress by rememberSaveable { mutableStateOf<String?>(null) }
+    var debugReturnScreen by rememberSaveable { mutableStateOf("scan") }
 
     // 蓝牙和权限状态
     var bluetoothEnabled by remember { mutableStateOf(bleManager.isBluetoothEnabled()) }
@@ -127,7 +128,10 @@ fun BluetoothAssistantApp() {
                     bleManager.connect(device.device)
                     screen = "control"
                 },
-                onSettingsClick = { screen = "debug" },
+                onSettingsClick = {
+                    debugReturnScreen = "scan"
+                    screen = "debug"
+                },
                 bluetoothEnabled = bluetoothEnabled,
                 hasPermissions = hasPermissions,
                 onRequestPermissions = {
@@ -173,7 +177,6 @@ fun BluetoothAssistantApp() {
                 deviceName = deviceName,
                 connected = connectionState == ConnectionState.READY,
                 onBack = {
-                    bleManager.disconnect()
                     screen = "scan"
                 },
                 rpm = rpm,
@@ -189,7 +192,12 @@ fun BluetoothAssistantApp() {
                 errorMessage = errorMessage,
                 onClearError = {
                     bleManager.clearError()
-                }
+                },
+                onOpenDebugger = {
+                    debugReturnScreen = "control"
+                    screen = "debug"
+                },
+                onDisconnect = { bleManager.disconnect() },
             )
         }
 
@@ -211,7 +219,7 @@ fun BluetoothAssistantApp() {
                     bleManager.sendRawHexCommand(hex)
                 },
                 onClearLogs = { bleManager.clearBleLogs() },
-                onBack = { screen = "scan" },
+                onBack = { screen = debugReturnScreen },
             )
         }
     }

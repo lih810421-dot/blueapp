@@ -20,7 +20,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.outlined.BluetoothDisabled
 import androidx.compose.material.icons.outlined.RestartAlt
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
@@ -71,6 +73,8 @@ fun DeviceControlScreen(
     connectionStateText: String,
     errorMessage: String?,
     onClearError: () -> Unit,
+    onOpenDebugger: () -> Unit,
+    onDisconnect: () -> Unit,
 ) {
     var targetRpmText by remember { mutableStateOf(rpm.toString()) }
     var inlineStatus by remember { mutableStateOf<String?>(null) }
@@ -115,7 +119,9 @@ fun DeviceControlScreen(
                 deviceName = deviceName,
                 connected = connected,
                 connectionStateText = connectionStateText,
-                onBack = onBack
+                onBack = onBack,
+                onOpenDebugger = onOpenDebugger,
+                onDisconnect = onDisconnect,
             )
 
             Spacer(modifier = Modifier.height(8.dp))
@@ -196,6 +202,8 @@ private fun TopBar(
     connected: Boolean,
     connectionStateText: String,
     onBack: () -> Unit,
+    onOpenDebugger: () -> Unit,
+    onDisconnect: () -> Unit,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -236,16 +244,34 @@ private fun TopBar(
 
         Row(
             verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-        Box(
-            modifier = Modifier
-                .size(10.dp)
-                .background(
-                    color = if (connected) Color(0xFF10B981) else Color(0xFF6B7280),
-                    shape = CircleShape,
-                ),
-        )
-            Spacer(modifier = Modifier.width(6.dp))
+            IconButton(onClick = onOpenDebugger) {
+                Icon(
+                    imageVector = Icons.Outlined.Settings,
+                    contentDescription = "调试器",
+                    tint = TechText,
+                    modifier = Modifier.size(22.dp),
+                )
+            }
+            IconButton(onClick = onDisconnect) {
+                Icon(
+                    imageVector = Icons.Outlined.BluetoothDisabled,
+                    contentDescription = "断开连接",
+                    tint = TechText,
+                    modifier = Modifier.size(22.dp),
+                )
+            }
+
+            Box(
+                modifier = Modifier
+                    .size(10.dp)
+                    .background(
+                        color = if (connected) Color(0xFF10B981) else Color(0xFF6B7280),
+                        shape = CircleShape,
+                    ),
+            )
+            Spacer(modifier = Modifier.width(4.dp))
             Text(
                 text = if (connected) "已连接" else "未连接",
                 color = if (connected) Color(0xFF10B981) else Color(0xFF6B7280),
